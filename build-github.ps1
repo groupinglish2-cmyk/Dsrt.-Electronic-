@@ -1,0 +1,81 @@
+# Genera la carpeta "sitio-github" lista para subir a GitHub Pages.
+#
+# El index.html de la raiz es la version que se publica como artifact de Claude:
+# es un fragmento, sin <!DOCTYPE>, <html> ni <head>. Este script lo envuelve en un
+# documento HTML completo, agrega los metadatos y copia los archivos que lo acompanan.
+#
+# Si editas index.html, volve a correr:   .\build-github.ps1
+
+Add-Type -AssemblyName System.Drawing
+
+$root   = Split-Path -Parent $MyInvocation.MyCommand.Path
+$srcFile = Join-Path $root 'index.html'
+$outDir  = Join-Path $root 'sitio-github'
+
+if(-not (Test-Path $outDir)){ New-Item -ItemType Directory -Path $outDir | Out-Null }
+
+# --- 1. separar estilos (van al <head>) del contenido (va al <body>) ---
+$src = [IO.File]::ReadAllText($srcFile, [Text.Encoding]::UTF8)
+$marker = '</style>'
+$i = $src.IndexOf($marker)
+if($i -lt 0){ throw 'No se encontro el bloque <style> en index.html' }
+
+$headSrc = $src.Substring(0, $i + $marker.Length)
+$bodySrc = $src.Substring($i + $marker.Length).Trim()
+
+# la etiqueta claude:viewport-fit-sides solo aplica dentro del visor de artifacts
+$headSrc = $headSrc -replace '\s*<meta name="claude:viewport-fit-sides" content="cover">', ''
+
+# --- 2. armar el documento completo ---
+$reset = @'
+  <style>
+    /* base equivalente a la que inyecta el visor de artifacts */
+    :root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+    body{margin:0}
+    img{max-width:100%}
+    [hidden]{display:none!important}
+  </style>
+'@
+
+$meta = @'
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="description" content="DSRT Electronic: venta de celulares liberados, accesorios y service tecnico propio. Garantia escrita de 12 meses, 6 cuotas sin interes, plan canje y envios en 24 a 48 h.">
+  <meta name="theme-color" content="#131C23">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="DSRT Electronic">
+  <meta property="og:description" content="Celulares, accesorios y service propio con garantia escrita de 12 meses.">
+  <meta property="og:image" content="logo-dsrt-electronic.png">
+  <link rel="icon" href="favicon.png" type="image/png">
+  <link rel="apple-touch-icon" href="favicon.png">
+'@
+
+$html = "<!DOCTYPE html>`r`n<html lang=`"es`">`r`n<head>`r`n" + $meta + $reset + "`r`n" + $headSrc + "`r`n</head>`r`n<body>`r`n" + $bodySrc + "`r`n</body>`r`n</html>`r`n"
+
+$utf8 = New-Object System.Text.UTF8Encoding $false
+[IO.File]::WriteAllText((Join-Path $outDir 'index.html'), $html, $utf8)
+
+# --- 3. copiar el logo y el backend ---
+Copy-Item (Join-Path $root 'logo-dsrt-electronic.png') $outDir -Force
+Copy-Item (Join-Path $root 'logo-dsrt-electronic.jpg') $outDir -Force
+Copy-Item (Join-Path $root 'apps-script') $outDir -Recurse -Force
+
+# --- 4. favicon cuadrado recortando la "D" del logo ---
+$logo = New-Object System.Drawing.Bitmap (Join-Path $root 'logo-dsrt-electronic.png')
+$crop = New-Object System.Drawing.Rectangle 4,38,180,156   # la "D" dentro del PNG de 720x302
+$size = 512
+$pad  = 46
+$fav = New-Object System.Drawing.Bitmap $size, $size, ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+$g = [System.Drawing.Graphics]::FromImage($fav)
+$g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+$esc = ($size - 2*$pad) / [math]::Max($crop.Width, $crop.Height)
+$dw = [int]($crop.Width * $esc); $dh = [int]($crop.Height * $esc)
+$dest = New-Object System.Drawing.Rectangle ([int](($size-$dw)/2)), ([int](($size-$dh)/2)), $dw, $dh
+$g.DrawImage($logo, $dest, $crop, [System.Drawing.GraphicsUnit]::Pixel)
+$g.Dispose()
+$fav.Save((Join-Path $outDir 'favicon.png'), [System.Drawing.Imaging.ImageFormat]::Png)
+$fav.Dispose(); $logo.Dispose()
+
+$kb = [math]::Round((Get-Item (Join-Path $outDir 'index.html')).Length/1KB,1)
+Write-Output "sitio-github/index.html  $kb KB"
+Get-ChildItem $outDir -Recurse -File | ForEach-Object { Write-Output ("  " + $_.FullName.Substring($outDir.Length+1)) }
